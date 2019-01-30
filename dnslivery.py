@@ -110,7 +110,7 @@ if __name__ == '__main__':
 
     # verify root
     if os.geteuid() != 0:
-        log('Script needs to be run with root privileges', '-')
+        log('Script needs to be run with root privileges to listen for incoming udp/53 packets', '-')
         sys.exit(-1)
 
     # verify path exists and is readable

@@ -59,14 +59,14 @@ If your zone is managed by a third-party provider, refer to their documentation 
 
 ## DNSLivery
 The only requirements to run DNSlivery are `python3` and its `scapy` library.
-```
+```bash
 git clone https://github.com/no0be/DNSlivery.git && cd DNSlivery
 pip install -r requirements.txt
 ```
 
 # Usage
 ## Server
-DNSlivery will serve all files of a given directory like (`pwd` by default):
+DNSlivery will serve all files of a given directory like (`pwd` by default) and needs to be **run with root privileges** to listen for incoming `udp/53` packets.
 
 ```
 usage: dnslivery.py [-h] [-p PATH] [-s SIZE] [-v] interface domain nameserver
