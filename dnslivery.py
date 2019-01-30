@@ -13,9 +13,13 @@ DNSlivery - Easy files and payloads delivery over DNS
 """
 
 def log(message, msg_type = ''):
-    prefix  = '[*]'
-    color   = '\033[0;m'
+    reset   = '\033[0;m'
 
+    # set default prefix and color
+    prefix  = '[*]'
+    color   = reset
+
+    # change prefix and color based on msg_type
     if msg_type == '+':
         prefix  = '[+]'
         color   = '\033[1;32m'
@@ -26,7 +30,7 @@ def log(message, msg_type = ''):
         prefix  = '[DEBUG]'
         color   = '\033[0;33m'
 
-    print('%s%s %s' % (color, prefix, message))
+    print('%s%s %s%s' % (color, prefix, message, reset))
 
 def base64_encode(filepath):
     with open(filepath, 'rb') as f:
