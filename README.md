@@ -69,7 +69,7 @@ pip install -r requirements.txt
 
 # Usage
 ## Server
-DNSlivery will serve all files of a given directory like (`pwd` by default) and needs to be **run with root privileges** to listen for incoming `udp/53` packets.
+DNSlivery will serve all files of a given directory (`pwd` by default) and needs to be **run with root privileges** to listen for incoming `udp/53` packets.
 
 ```
 usage: dnslivery.py [-h] [-p PATH] [-s SIZE] [-v] interface domain nameserver
@@ -97,6 +97,16 @@ DNSlivery - Easy files and payloads delivery over DNS
 [*] File "file" ready for delivery at file.dnsd.no0.be (7 chunks)
 [*] Listening for DNS queries...
 ```
+
+### Note on filename normalization
+As the charset allowed for domain names is much more restrictive than for UNIX filenames (per [RFC1035](https://tools.ietf.org/html/rfc1035#section-2.3.1)), DNSlivery will perform normalization when required.
+
+**Example**:
+```
+[*] File "My Awesome Powershell Script ;).ps1" ready for delivery at my-awesome-powershell-script----ps1.dnsd.no0.be (1891 chunks)
+```
+
+**Be aware that the current normalization code is not perfect as it does not take overlapping filenames or size limit into account.**
 
 ## Target
 On the target, start by **retrieving the stager** of the desired file by requesting its dedicated `TXT` record.
