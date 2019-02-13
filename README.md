@@ -30,6 +30,8 @@ DNSlivery allows to deliver files to a target using DNS as the transport protoco
 - does not require any client on the target
 - does not require a full-fledged DNS server
 
+![demo-target.git](img/demo-target.gif)
+
 ## What problem are you trying to solve?
 Easily deliver files and/or payloads to a compromised target where classic web delivery is not possible and **without the need for a dedicated client software**. This applies to restricted environments where outgoing web traffic is forbidden or simply inspected by a curious web proxy.
 
